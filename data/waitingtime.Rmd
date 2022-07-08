@@ -1,0 +1,442 @@
+---
+title: "WaitingTime"
+output: html_document
+date: '2022-06-23'
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(knitr)
+if (!require("kableExtra"))
+{
+  install.packages("kableExtra")
+  library(kableExtra)
+}
+
+library(lubridate)
+library(ggplot2)
+
+knitr::opts_chunk$set(echo = TRUE)
+print.all.code=FALSE
+#Setting this TRUE will include all code chunks in the PDF
+```
+
+## R Markdown
+
+
+```{r data}
+# Read the dataset of ongoing waits
+df_ow <- read.csv("ongoing waits.csv")
+
+# For better printing
+df_ow <- as_tibble(df_ow)
+
+# Drop those useless data
+# Create dataset that only contain information 
+# of Inpatient and Daycase that we are interested
+# Create year,month,day columns according to MonthEnding
+# Create Quater column according to month
+# in this case we can do further combination with UrbanRural data by quarter
+df_ow <- df_ow %>%
+  filter((PatientType== 'Inpatient/Day case')
+         &(!NumberWaitingQF %in% c(':',':u')))%>%
+  mutate(Date = ymd(MonthEnding))%>%
+  mutate_at(vars(Date), funs(year, month, day))%>%
+  mutate(Quarter = case_when(
+         month %in% 1:3 ~ "Q1",
+         month %in%  4:6  ~ "Q2",
+         month %in%  7:9  ~ "Q3",
+         TRUE ~ "Q4"))%>%
+  select(HBT,PatientType,Specialty,NumberWaiting,
+         NumberWaitingOver12Weeks,Date,year,Quarter,month)%>%
+  arrange(Date)%>%
+  filter(! HBT %in% 'null')
+
+```
+
+## Including Plots
+
+```{r df, echo=FALSE}
+df_HBT <- df_ow %>% 
+  group_by(HBT,Date)%>%
+  summarise(NumberWaiting = sum(NumberWaiting),.groups = 'drop')
+
+# EDA of ongoing waits data
+ggplot(
+  data = df_HBT,
+  mapping = aes(
+    x = Date,
+    y = NumberWaiting,
+    color = HBT
+  )) + 
+  geom_point(size=2,shape=3
+  )+
+  geom_line()+
+  labs(
+    title = "The number of Inpatien/Daycase in ongoing waiting system",
+    subtitle = paste("over 2012.10 - 2022.03"),
+    caption = "Overall year trend"
+  )+
+  scale_color_viridis_d()+
+  scale_y_continuous(breaks = seq(0, max(df_HBT$NumberWaiting), by = 50000))
+```
+
+```{r, echo=FALSE}
+df_nwQ <- df_ow%>%group_by(HBT,Date,Quarter)%>%
+  summarise(NumberWaiting= sum(NumberWaiting),.groups = 'drop')
+
+ggplot(
+  data = df_nwQ,
+  mapping = aes(
+    x = HBT,
+    y = NumberWaiting,
+    color = HBT
+  )) +
+  geom_boxplot()+
+  # geom_smooth(method = glm)+
+  labs(
+    title = "The number of Inpatien/Daycase in ongoing waiting system",
+    subtitle = paste("over 2012.10 - 2022.03"),
+    caption = "Overall year trend"
+  )+
+  scale_color_viridis_d()+
+  scale_y_continuous(limits = c(0,200000))+
+  facet_wrap(~Quarter,ncol=2)+
+  theme(axis.text.x = element_blank()) 
+
+```
+
+```{r,echo=FALSE}
+# Demography information
+df_demo <- read.csv("HBdemography.csv")
+df_proj <- read.csv("hb_pop_proj_03072020.csv")
+
+# Combine demography data with poplation projection
+# as we only have demography data for 2012-2020 but have ongoing waits data for 2012-2022
+# we will use the population projection for 2021 and 2022 as the demography statistis
+
+df_demo <- df_demo%>%
+  filter(Year >= 2012 & Year <= 2020)%>%
+  select(!X_id)
+df_proj <- df_proj%>%
+  filter(Year >= 2021 & Year <= 2022)
+
+df_pln <- as_tibble(rbind(df_demo,df_proj))  
+
+# Conver long dataframe of population data into wide one 
+# Then we can combine the population data with ongoing waits data according to HBT and year
+df_plnT <- df_pln%>%
+  mutate(
+    Child = rowSums(.[7:25]),
+    Old = rowSums(.[-71:-1])
+  )%>%
+  select(Year,HB,Sex,AllAges,Child,Old)%>%
+  pivot_wider(
+    names_from = Sex,
+    names_sep = ".",
+    values_from = c(AllAges,Child,Old),
+    values_fn = sum
+  )
+
+# Combine ongoing waits data with demography data
+# remove region SB0801: Golden Jubilee National Hospital
+# This is in contrast to other health boards that 
+# primarily serve the demographic area in which they are located in 
+# and this is why the Golden Jubilee is not included in the 'HBdemography' and 'smid' datasets
+data <- left_join(df_ow,df_plnT, by = c("HBT" = "HB", "year" = "Year"))%>%
+  filter(HBT != 'SB0801')
+
+
+```
+
+```{r,echo=FALSE}
+## UrbanRural Factor
+# read table of two tables 
+# table 1 telling 
+# standard geography codes (S01) and matching labels for Data Zone 2011 in the health sector
+
+# table 2 telling
+#  urban and rural areas across Scotland defined by Scottish Government
+
+df_datazone <- read.csv("datazone2011.csv")
+df_ur <- read.csv("urban_rural.csv")
+
+# combine these two dataframes so that 
+# we can know whether rural/urban areas the standard geography codes(HB) is
+# by matching datazone
+
+df_ur <- left_join(df_ur,df_datazone,by = c('DataZone'))%>%
+  select(c(HB,DataZone,UrbanRural8fold2016))%>%
+  group_by(HB)%>%
+  summarise(UrbanRuralfold = mean(UrbanRural8fold2016),.groups = 'drop')
+
+# Combine UrbanRural 
+data1 <- left_join(data,df_ur,by = c('HBT' = 'HB'))
+
+```
+
+
+```{r,echo=FALSE}
+## SIMD data
+df_SIMD20 = read.csv("simd2020v2_22062020.csv")
+df_SIMD16 = read.csv("simd2016_18052020.csv")
+df_SIMD12 = read.csv("simd2012_02042020.csv")
+
+CleanSIMD <- function(dataframe,year){
+ dataframe <- dataframe%>%select(c(HB,7,9,11,13,15,16))%>%
+   # aggregate(.~HB,FUN = mean)%>%
+  group_by(HB)%>%
+  summarise_at(vars(-0), funs(mean(.)))%>%
+   mutate(
+     Year = year
+   )%>%
+   mutate(YearRound = case_when(
+         Year == 2012 ~ "12-16",
+         Year ==  2016  ~ "16-20",
+         TRUE ~ "20-22"))
+ colnames(dataframe)  <- c('HB','CountryDecile','HBDecile','HSCPDecile',
+                           'CADecile','Most15pc','Least15pc','Year','YearRound')
+ return(dataframe)
+}
+
+df_SIMD <- rbind(CleanSIMD(df_SIMD12,2012),
+                 CleanSIMD(df_SIMD16,2016),
+                 CleanSIMD(df_SIMD20,2020))
+
+# data2 is the table with ongoing waits,demography,urbanrural,SIMD
+data2 <- as_tibble(data1)%>%mutate(
+  YearRound = case_when(
+         year %in% 2012:2015 ~ "12-16",
+         year %in% 2017:2020  ~ "16-20",
+         TRUE ~ "20-22")
+  )%>%
+  left_join(df_SIMD, by = c('HBT' = 'HB','YearRound' = 'YearRound'))%>%
+  # S92000003 is missing, S92000003 is the country code for scotland
+  # so we can impute the missing value with mean value of other district
+  mutate_all(funs(ifelse(is.na(.), mean(., na.rm = TRUE), .)))%>%
+  select(!c(AllAges.Male,Child.Male,Old.Male,Year))
+
+
+
+```
+
+
+
+```{r,echo=FALSE}
+## Addition and Removals
+df_ar <- read.csv("addtions and removals on wls.csv")
+df_ar <- df_ar%>%
+  # Drop those useless data
+  filter((PatientType== 'Inpatient/Day case')
+         &(!AdditionsQF %in% c(':',':u')))%>%
+  # Addition and Removals data only record data throung quarter end
+  # So we have to do some data pre-processing before merge into main data
+  mutate(Date = ymd(QuarterEnding))%>%
+  mutate_at(vars(Date), funs(year, month, day))%>%
+  mutate(Quarter = case_when(
+         month %in% 1:3 ~ "Q1",
+         month %in%  4:6  ~ "Q2",
+         month %in%  7:9  ~ "Q3",
+         TRUE ~ "Q4"))%>%
+  select(c(HBT,PatientType,Specialty,Additions,Removals,ReferredBackToGP,
+           Transferred,TreatmentNoLongerRequired,Quarter,year))
+
+# Combine with main data with tidy Addition and Removals 
+
+# help function
+# find those columns contains missing value
+ColumnswithNA <- function(dataframe){
+  columnsNA <- c(colnames(dataframe)[ apply(dataframe, 2, anyNA) ])
+  return(columnsNA)
+}
+
+  # Sort value by HBT and Specialty 
+  # so that we group items with same health board and specailty
+  # in this case we can fill the missing value with the corresponding adjacent value
+
+# data3 is the table with ongoingwaits,demography,urbanrural,SIMD,additions and removals
+data3 <- left_join(data2,df_ar,by = c('HBT','Specialty',
+                                      'Quarter','year','PatientType'))%>%
+  group_by(HBT,Specialty)%>%
+  fill(.,ColumnswithNA(.), .direction = "downup") %>%
+  dplyr::ungroup()
+
+```
+
+
+
+```{r}
+# Emergency call
+df_emgy <- read.csv("emergency.csv")
+df_emgy <- df_emgy%>%
+  filter(
+    Month >= 201210 & Month <= 202203
+  )%>%
+  mutate(Date = ym(Month))%>%
+  mutate_at(vars(Date), funs(year, month, day))%>%
+  select(c(year,month,HBT,DepartmentType,NumberOfAttendancesAggregate))%>%
+  # pivot to wider data with Minor Injury Unit or Other and
+  # Emergency Department attendance as new columns 
+  pivot_wider(
+    names_from = DepartmentType,
+    names_sep = ".",
+    values_from = c(NumberOfAttendancesAggregate),
+    values_fn = sum,
+    values_fill = 0
+  )%>%
+  mutate(
+    # Get the total number of emergency attendance by
+    # the sum of minor injury and emergency treatment
+    NumberEmergency = rowSums(.[4:5])
+  )
+
+colnames(df_emgy) <- c('year','month','HBT','MIO','EMD','NumberEmergency')
+data4 <- left_join(data3,df_emgy,by = c('HBT','year','month'))%>%
+  # We have HB S92000003 with missing value in emergency call
+  # handdle it with mean imputation
+  mutate_all(funs(ifelse(is.na(.), mean(., na.rm = TRUE), .)))
+  
+```
+
+
+-----------------
+```{r}
+# Add some features
+my_data <- data4 %>% mutate(
+  prop.child = Child.All / AllAges.All,
+  prop.female = AllAges.Female / AllAges.All,
+  prop.old = Old.All / AllAges.All,
+  ARoffset = Additions - Removals
+)
+
+data.explore <- select(my_data,c(NumberWaitingOver12Weeks,AllAges.All,
+                         prop.child,prop.female,prop.old,UrbanRuralfold,ARoffset,
+                         HBDecile,Most15pc,NumberEmergency,NumberWaiting))
+```
+
+
+
+```{r}
+library(Hmisc)
+# Help function
+# find those useful and correlated varaible 
+# so we can just choose those useful information to explore 
+# in this way we can do feature dimension reduction
+getCorr <- function(dataframe,y){
+  y_columnindex <- which(colnames(dataframe)== y)
+  corr_matrix <- rcorr(as.matrix(dataframe),type="pearson")
+  corr_xy <- as_tibble(corr_matrix$r)%>%pull(y_columnindex)
+  p_xy <- as_tibble(corr_matrix$P)%>%pull(y_columnindex)
+  table <- rbind(corr_xy[-y_columnindex],
+                p_xy[-y_columnindex])
+  colnames(table) <- colnames(dataframe)[-y_columnindex]
+  rownames(table) <- c('corr','P')
+  round(table,3)
+}
+getCorr(data.explore,'NumberWaiting')
+```
+
+
+
+```{r}
+library("glmmTMB")
+
+formula_ =  as.formula(NumberWaiting~ARoffset+UrbanRuralfold+prop.old+prop.female+ 
+                         NumberEmergency + offset(log(AllAges.All))+ HBDecile+
+                         (1|HBT) + (1|Specialty))
+
+mpossion <- glmmTMB(formula_,
+data=my_data,ziformula=~1,
+family=poisson)
+
+yhat <- fitted(mpossion)
+coefficients(mpossion)
+
+
+# plot residual
+df_res <- as.data.frame(cbind(my_data$NumberWaiting,yhat))
+colnames(df_res) <- c('obs','fit')
+ggplot(data = df_res,
+       mapping = aes(
+         x = obs,
+         y = fit
+       ))+
+  geom_point()
+
+# another way plot res
+res <- residuals(mpossion)
+plot(res)
+hist(res,xlim = c(-200,200))
+
+library('DHARMa', quietly = TRUE)
+res <- simulateResiduals(mpossion)
+plot(res)
+```
+
+
+
+
+
+```{r}
+## check specific rows with NA
+# data4[is.na(data4$NumberEmergency),]
+  
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+## Another way to tidy demography data
+
+# df_plnt <- df_pln%>%
+#   pivot_longer(
+#     cols = starts_with("Age"),
+#     names_to = "Age",
+#     names_prefix = "Age",
+#     values_to = "Num"
+#   )%>%
+#   mutate(
+#     AgeGroup = case_when(
+#          Age %in% 0:18 ~ "Children",
+#          Age %in% 19:64 ~ "Adult",
+#          Age >= 65  ~ "Old"))%>%
+#   group_by(AgeGroup,HB,Year,Sex,AllAges)%>%
+#   summarise(n= sum(Num),.groups = 'drop')%>%
+#   pivot_wider(
+#     names_from = AgeGroup,
+#     values_from = n
+#   )%>%
+#   pivot_wider(
+#     names_from = Sex,
+#     names_sep = ".",
+#     values_from = c(AllAges,Adult,Children,Old),
+#     values_fn = sum
+#   )%>%
+#   select(c(HB,Year,AllAges.All,AllAges.Female,Children.All,Old.All))
+
+```
+
+

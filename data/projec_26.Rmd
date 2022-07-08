@@ -1,0 +1,898 @@
+---
+title: "WaitingTime"
+output: html_document
+date: '2022-06-23'
+---s
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(knitr)
+if (!require("kableExtra"))
+{
+  install.packages("kableExtra")
+  library(kableExtra)
+}
+
+library(lubridate)
+library(ggplot2)
+
+
+knitr::opts_chunk$set(echo = TRUE)
+print.all.code=FALSE
+#Setting this TRUE will include all code chunks in the PDF
+```
+
+## R Markdown
+
+```{r}
+# read the name of specialty and health board
+df_nameHB <- read.csv("hb14_hb19.csv")
+df_nameSpe <- read.csv("specialty-reference.csv")
+
+```
+
+```{r data}
+# Read the dataset of ongoing waits
+df_ow <- read.csv("ongoing waits.csv")
+
+# For better printing
+df_ow <- as_tibble(df_ow)
+
+# Drop those useless data
+# Create dataset that only contain information 
+# of Inpatient and Daycase that we are interested
+# Create year,month,day columns according to MonthEnding
+# Create Quater column according to month
+# in this case we can do further combination with UrbanRural data by quarter
+df_ow <- df_ow %>%
+  filter((PatientType== 'Inpatient/Day case')
+         &(!NumberWaitingQF %in% c(':',':u')))%>%
+  mutate(Date = ymd(MonthEnding))%>%
+  mutate_at(vars(Date), funs(year, month, day))%>%
+  mutate(Quarter = case_when(
+         month %in% 1:3 ~ "Q1",
+         month %in%  4:6  ~ "Q2",
+         month %in%  7:9  ~ "Q3",
+         TRUE ~ "Q4"))%>%
+  select(HBT,PatientType,Specialty,NumberWaiting,
+         NumberWaitingOver12Weeks,Date,year,Quarter,month)%>%
+  arrange(Date)%>%
+  filter(! HBT %in% 'null')%>%
+  # add HB name information
+  left_join(df_nameHB,by = c('HBT' ='HB'))%>%
+  mutate(HBName = case_when(is.na(HBName) & HBT == 'S92000003' ~ "Scotland",
+                            is.na(HBName) & HBT == 'SB0801' ~ "Golden Jubilee National Hospital",
+                                TRUE ~ HBName))%>%
+  # add Specialty name information
+  left_join(df_nameSpe,by = c('Specialty' ='Specialty'))%>%
+  select(!c(HBDateEnacted,HBDateArchived,Country))
+  
+
+
+```
+
+## Including Plots
+
+```{r df, echo=FALSE}
+df_HBT <- df_ow %>% 
+  group_by(HBName,Date)%>%
+  summarise(NumberWaiting = sum(NumberWaiting),.groups = 'drop')
+
+# EDA of ongoing waits data
+p1 <-ggplot(
+  data = df_HBT,
+  mapping = aes(
+    x = Date,
+    y = NumberWaiting,
+    color = HBName
+  )) + 
+  geom_point(size=2,shape=3
+  )+
+  geom_line()+
+  labs(
+    title = "The number of Inpatien/Daycase in ongoing waiting system",
+    subtitle = paste("over 2012.10 - 2022.03"),
+    caption = "By health board"
+  )+
+  scale_color_viridis_d()+
+  scale_y_continuous(breaks = seq(0, max(df_HBT$NumberWaiting), by = 50000))+
+  geom_text(data = df_HBT %>% filter(Date == last(Date)&NumberWaiting>30000), 
+            aes(label = HBName, 
+                x = Date - 380, 
+                y = NumberWaiting-2000),
+            color = 'Black')+
+  theme(legend.position="none")
+p1
+```
+
+```{r}
+df_Spe <- df_ow %>% 
+  filter(HBT != 'S92000003')%>%
+  group_by(Specialty,Date)%>%
+  summarise(NumberWaiting = sum(NumberWaiting),.groups = 'drop')%>%
+  filter(!Specialty %in% c('Z9'))
+
+p2 <-ggplot(
+  data = df_Spe,
+  mapping = aes(
+    x = Date,
+    y = NumberWaiting,
+    color = Specialty
+  )) + 
+  geom_point(size=2,shape=3
+  )+
+  geom_line()+
+  labs(
+    title = "The number of Inpatien/Daycase in ongoing waiting system",
+    subtitle = paste("over 2012.10 - 2022.03"),
+    caption = "By specialty"
+  )+
+  scale_color_viridis_d()+
+  scale_y_continuous(breaks = seq(0, max(df_HBT$NumberWaiting), by = 10000))+
+  geom_text(data = df_Spe %>% filter(Date == last(Date)&NumberWaiting>3000), 
+            aes(label = Specialty, 
+                x = Date + 0.5, 
+                y = NumberWaiting),
+            color = 'Black')+
+  theme(legend.position="none")
+p2
+```
+
+```{r}
+# library(patchwork)
+p1 <- p1 + labs(title = NULL, subtitle = NULL)
+p2 <- p2 + labs(title = NULL, subtitle = NULL)
+(p1+p2)
+```
+
+```{r, echo=FALSE}
+df_nwQ <- filter(df_ow,HBName != 'Scotland' & Specialty != "Z9")%>%
+  group_by(HBName,Date,Quarter)%>%
+  # Quarter sum of NumberWaiting
+  summarise(NumberWaiting= sum(NumberWaiting),.groups = 'drop')
+
+# Check if NumberWaiting a seasonal variable
+ggplot(
+  data = df_nwQ,
+  mapping = aes(
+    x = HBName,
+    y = NumberWaiting,
+    color = HBName
+  )) +
+  geom_boxplot()+
+  labs(
+    subtitle = paste("Facet by quarter")
+  )+
+  scale_color_viridis_d()+
+  scale_y_continuous(limits = c(0,max(df_nwQ$NumberWaiting)))+
+  facet_wrap(~Quarter,ncol=2)+
+  theme(axis.text.x = element_blank())+
+  theme_light()+
+  theme(axis.text.x=element_text(angle=90, hjust =1),
+        legend.position = "none")+
+  xlab("")
+
+```
+
+
+```{r,echo=FALSE}
+# Demography information
+df_demo <- read.csv("HBdemography.csv")
+df_proj <- read.csv("hb_pop_proj_03072020.csv")
+
+# Combine demography data with poplation projection
+# as we only have demography data for 2012-2020 but have ongoing waits data for 2012-2022
+# we will use the population projection for 2021 and 2022 as the demography statistis
+
+df_demo <- df_demo%>%
+  filter(Year >= 2012 & Year <= 2020)%>%
+  select(!X_id)
+df_proj <- df_proj%>%
+  filter(Year >= 2021 & Year <= 2022)
+
+df_pln <- as_tibble(rbind(df_demo,df_proj))  
+
+# Conver long dataframe of population data into wide one 
+# Then we can combine the population data with ongoing waits data according to HBT and year
+df_plnT <- df_pln%>%
+  mutate(
+    Child = rowSums(.[7:25]),
+    Old = rowSums(.[-71:-1])
+  )%>%
+  select(Year,HB,Sex,AllAges,Child,Old)%>%
+  pivot_wider(
+    names_from = Sex,
+    names_sep = ".",
+    values_from = c(AllAges,Child,Old),
+    values_fn = sum
+  )
+
+# Combine ongoing waits data with demography data
+# remove region SB0801: Golden Jubilee National Hospital
+# This is in contrast to other health boards that 
+# primarily serve the demographic area in which they are located in 
+# and this is why the Golden Jubilee is not included in the 'HBdemography' and 'smid' datasets
+data <- left_join(df_ow,df_plnT, by = c("HBT" = "HB", "year" = "Year"))%>%
+  filter(HBT != 'SB0801')
+
+
+```
+
+```{r,echo=FALSE}
+## UrbanRural Factor
+# read table of two tables 
+# table 1 telling 
+# standard geography codes (S01) and matching labels for Data Zone 2011 in the health sector
+
+# table 2 telling
+#  urban and rural areas across Scotland defined by Scottish Government
+
+df_datazone <- read.csv("datazone2011.csv")
+df_ur <- read.csv("urban_rural.csv")
+
+# combine these two dataframes so that 
+# we can know whether rural/urban areas the standard geography codes(HB) is
+# by matching datazone
+
+df_ur <- left_join(df_ur,df_datazone,by = c('DataZone'))%>%
+  select(c(HB,DataZone,UrbanRural8fold2016))%>%
+  group_by(HB)%>%
+  summarise(UrbanRuralfold = mean(UrbanRural8fold2016),.groups = 'drop')
+
+# Combine UrbanRural 
+data1 <- left_join(data,df_ur,by = c('HBT' = 'HB'))
+
+```
+
+```{r,echo=FALSE}
+## SIMD data
+df_SIMD20 = read.csv("simd2020v2_22062020.csv")
+df_SIMD16 = read.csv("simd2016_18052020.csv")
+df_SIMD12 = read.csv("simd2012_02042020.csv")
+
+# Help funcction to clean original SIMD data 
+CleanSIMD <- function(dataframe,year){
+ dataframe <- dataframe%>%select(c(HB,7,9,11,13,15,16))%>%
+   group_by(HB)%>%
+   mutate(across(ends_with("Decile"),mean))%>%
+   mutate(across(ends_with("15pc"),sum))%>%
+   summarise(across(!where(is.character),mean))%>%
+   # aggregate(.~HB,FUN = mean)%>%
+   # group_by(HB)%>%
+   # summarise_at(vars(-0), funs(mean(.)))%>%
+   mutate(
+     Year = year
+   )%>%
+   mutate(YearRound = case_when(
+         Year == 2012 ~ "12-16",
+         Year ==  2016  ~ "16-20",
+         TRUE ~ "20-22"))
+ colnames(dataframe)  <- c('HB','CountryDecile','HBDecile','HSCPDecile',
+                           'CADecile','Most15pc','Least15pc','Year','YearRound')
+ return(dataframe)
+}
+
+df_SIMD <- rbind(CleanSIMD(df_SIMD12,2012),
+                 CleanSIMD(df_SIMD16,2016),
+                 CleanSIMD(df_SIMD20,2020))
+
+# data2 is the table with ongoingwaits,demography,urbanrural,SIMD
+data2 <- data1%>%mutate(
+  YearRound = case_when(
+         year %in% 2012:2015 ~ "12-16",
+         year %in% 2017:2020  ~ "16-20",
+         TRUE ~ "20-22")
+  )%>%
+  left_join(df_SIMD, by = c('HBT' = 'HB','YearRound' = 'YearRound'))%>%
+  # S92000003 is missing, S92000003 is the country code for scotland
+  # so we can impute the missing value with mean value of other district
+  mutate_all(funs(ifelse(is.na(.), mean(., na.rm = TRUE), .)))%>%
+  select(!Year)
+
+```
+
+```{r,echo=FALSE}
+## Addition and Removals
+df_ar <- read.csv("addtions and removals on wls.csv")
+df_ar <- df_ar%>%
+  # Drop those useless data
+  filter((PatientType== 'Inpatient/Day case')
+         &(!AdditionsQF %in% c(':',':u')))%>%
+  # Addition and Removals data only record data throung quarter end
+  # So we have to do some data pre-processing before merge into main data
+  mutate(Date = ymd(QuarterEnding))%>%
+  mutate_at(vars(Date), funs(year, month, day))%>%
+  mutate(Quarter = case_when(
+         month %in% 1:3 ~ "Q1",
+         month %in%  4:6  ~ "Q2",
+         month %in%  7:9  ~ "Q3",
+         TRUE ~ "Q4"))%>%
+  select(c(HBT,PatientType,Specialty,Additions,Removals,ReferredBackToGP,
+           Transferred,TreatmentNoLongerRequired,Quarter,year))
+
+# Combine with main data with tidy Addition and Removals 
+
+# help function
+# find those columns contains missing value
+ColumnswithNA <- function(dataframe){
+  columnsNA <- c(colnames(dataframe)[ apply(dataframe, 2, anyNA) ])
+  return(columnsNA)
+}
+
+  # Sort value by HBT and Specialty 
+  # so that we group items with same health board and specailty
+  # in this case we can fill the missing value with the corresponding adjacent value
+
+# data3 is the table with ongoingwaits,demography,urbanrural,SIMD,additions and removals
+data3 <- left_join(data2,df_ar,by = c('HBT','Specialty',
+                                      'Quarter','year','PatientType'))%>%
+  group_by(HBT,Specialty)%>%
+  fill(.,ColumnswithNA(.), .direction = "downup") %>%
+  dplyr::ungroup()
+
+```
+
+```{r}
+# Emergency call
+df_emgy <- read.csv("emergency.csv")
+df_emgy <- df_emgy%>%
+  filter(
+    Month >= 201210 & Month <= 202203
+  )%>%
+  mutate(Date = ym(Month))%>%
+  mutate_at(vars(Date), funs(year, month, day))%>%
+  select(c(year,month,HBT,DepartmentType,NumberOfAttendancesAggregate))%>%
+  # pivot to wider data with Minor Injury Unit or Other and
+  # Emergency Department attendance as new columns 
+  pivot_wider(
+    names_from = DepartmentType,
+    names_sep = ".",
+    values_from = c(NumberOfAttendancesAggregate),
+    values_fn = sum,
+    values_fill = 0
+  )%>%
+  mutate(
+    # Get the total number of emergency attendance by
+    # the sum of minor injury and emergency treatment
+    NumberEmergency = rowSums(.[4:5])
+  )
+
+colnames(df_emgy) <- c('year','month','HBT','MIO','EMD','NumberEmergency')
+data4 <- left_join(data3,df_emgy,by = c('HBT','year','month'))%>%
+  # We have HB S92000003 with missing value in emergency call
+  # handdle it with mean imputation
+  mutate_all(funs(ifelse(is.na(.), mean(., na.rm = TRUE), .)))
+  
+```
+
+```{r}
+# Consultant information
+df_WTE <- read.csv("EQconsultants.csv")
+df_WTE <- df_WTE%>%
+  # pivot to longer data to have HBName and corresponding
+  # WTE as new columns
+  pivot_longer(
+    cols = starts_with("NHS"),
+    names_to = "HBName",
+    values_to = "WTE"
+  )%>%
+  # Adjust original data value on HBName so thatn we can later join with data4
+  mutate(
+    HBName = gsub('\\.', ' ', HBName),
+    (across('X', str_replace, 'All specialties',
+            'All specialties, topic specific')))
+
+# To make parameters for joining consistent
+df_WTE$X <- tolower(df_WTE$X)
+data4$SpecialtyName <- tolower(data4$SpecialtyName)
+
+data5 <- left_join(data4,df_WTE,
+          by = c("HBName" = "HBName", "SpecialtyName" = "X"))%>%
+          filter(HBT != 'S92000003')%>%
+          mutate(WTE = ifelse(is.na(WTE), 0, WTE))
+
+
+
+```
+
+```{r}
+# Hospital beds information
+df_beds1220 <- read.csv("bedsinformation.csv")
+df_beds2021 <- read.csv("bedsinforAT2021.csv")
+
+Spelist <- unique(df_ow$SpecialtyName)
+
+df_beds1220 <- df_beds1220%>%
+  # filter(HB != 'S92000003' & SpecialtyQF != 'z') %>% 
+  filter(SpecialtyQF != 'z' & SpecialtyName %in% Spelist) %>% 
+  mutate(
+  Year = substr(FinancialYear,  1, 4) #Create a year column to get a full date format. The day will be dropped in later
+  )%>%
+  select(Year,HB,Specialty,SpecialtyName,PercentageOccupancy)%>%
+  filter(Year != '2011')%>%
+  # Only PercentageOccupancy column contain missing value and we  it with 0
+  replace(is.na(.), 0)
+df_beds1220$Year <- as.numeric(df_beds1220$Year)
+
+df_beds2021<- df_beds2021%>%
+  group_by(Year,HB,Specialty,SpecialtyName,SpecialtyQF)%>%
+  summarise(PercentageOccupancy = mean(PercentageOccupancy),
+            .groups = "drop")%>%
+   filter(SpecialtyQF != 'z' & SpecialtyName %in% Spelist)%>%
+  select(Year,HB,Specialty,SpecialtyName,PercentageOccupancy)
+  
+
+
+df_beds <- bind_rows(df_beds1220,df_beds2021)
+df_beds$SpecialtyName <- tolower(df_beds$SpecialtyName)
+
+data6 <- left_join(data5,df_beds,
+                   by = c('HBT' = 'HB','year' = 'Year',
+                          'Specialty' = 'Specialty',
+                          'SpecialtyName' = 'SpecialtyName'))%>%
+  filter(Specialty != 'Z9')%>%
+  # Here for the missing value we find that except for year 2022,
+  # most of missing value generated from specialty with small weighted equivalent
+  # consultant, so we will fill these with 0
+  # for year 2022 we would fill it with last year's value 
+  mutate(
+    PercentageOccupancy = 
+      case_when(
+       is.na(PercentageOccupancy) &year < 2022  ~ 0,
+       TRUE ~ PercentageOccupancy
+    )
+  )%>%
+  group_by(HBT,Specialty)%>%
+  # fill with adjacent value
+  fill(.,ColumnswithNA(.), .direction = "downup") %>%
+  dplyr::ungroup()%>%
+  mutate(PercentageOccupancy = if_else(is.na(PercentageOccupancy), 0, PercentageOccupancy))
+
+```
+
+```{r}
+# analysis of bed information
+Analysisbeds <- df_beds%>%
+  group_by(Specialty,Year)%>%
+  summarise(PercentageOccupancy = mean(PercentageOccupancy),.groups = 'drop')%>%
+  group_by(Specialty) %>% 
+  mutate(PO.mean = mean(PercentageOccupancy))
+
+# plot bed infor
+p3 <-ggplot(
+  data = filter(Analysisbeds,PO.mean>70),
+  mapping = aes(
+    x = Specialty,
+    y = PercentageOccupancy,
+    color = Specialty
+  )) +
+  geom_boxplot()+
+  # geom_smooth(method = glm)+
+  labs(
+    caption = "20 Specialty with mean PercentageOccupancy higher than 70",
+    subtitle = "Percentage Occupancy = total number of occupied bed per day/total number of available per day"
+  )+
+  scale_color_viridis_d()+
+  scale_y_continuous(limits = c(70,100))+
+  theme(
+    legend.position = "none"
+  )+
+  xlab("")
+
+p3
+```
+
+------------------------------------------------------------------------
+
+```{r}
+# Add some features
+my_data <- data6 %>% mutate(
+  prop.child = round(Child.All / AllAges.All,3),
+  prop.female = round(AllAges.Female / AllAges.All,3),
+  prop.male = round(AllAges.Male / AllAges.All,3),
+  prop.old = round(Old.All / AllAges.All,3),
+  ARratio = ifelse(is.infinite(Additions/Removals),0,round(Additions/Removals,3)),
+  prop.mdpriv = ifelse(!is.na(round(Most15pc/(Most15pc + Least15pc),3)),
+                       round(Most15pc/(Most15pc + Least15pc),3),0)
+)%>%
+  mutate(across(where(~is.numeric(.)) & !starts_with('prop')& !starts_with('AR'),round,0))
+
+
+```
+
+```{r}
+# Analysis for Urban/Rural/Remote area
+anlsUR <- my_data%>%
+  group_by(HBName,Date,UrbanRuralfold)%>%
+  summarise(NumberWaiting = mean(NumberWaiting),.groups = 'drop')%>%
+  mutate(Date = as.Date(Date))
+
+
+anlsUR$UrbanRuralfold <- as.character(anlsUR$UrbanRuralfold)
+
+ggplot(
+  data = anlsUR,
+  mapping = aes(
+    x = Date,
+    y = NumberWaiting,
+    color = HBName
+  ))+
+  geom_line()+
+  scale_color_viridis_d()+
+  # Facet by HB
+  facet_wrap(~UrbanRuralfold,ncol = 3)+
+  theme(
+    legend.position = 'bottom'
+  )
+
+```
+
+```{r}
+## Analysis for deprivation
+anlsDpr <- my_data%>%
+  group_by(HBName,Date,CountryDecile)%>%
+  # Get the total number of 15% most and least deprived areas for HB
+  summarise(NumberWaiting = mean(NumberWaiting),
+            Most15pc = sum(Most15pc),
+            Least15pc = sum(Least15pc),
+            .groups = 'drop')%>%
+  # Get new feature: proportion of most deprived in (most and least deprivation)
+  # More quantitative information compared with charactic one
+  mutate(Date = as.Date(Date),
+         prop.mdpriv = ifelse(!is.na(round(Most15pc/(Most15pc + Least15pc),3)),
+                       round(Most15pc/(Most15pc + Least15pc),3),0))
+
+
+# split data frame by CountryDecile to get label for each facet below
+dfs = split(anlsDpr, f = anlsDpr$CountryDecile)
+# apply ggplot function and write to list
+gg_l = lapply(dfs, function(x) {
+  ggplot(x, aes(x = prop.mdpriv,y = NumberWaiting, group = 1, colour = HBName)) + 
+    geom_point(aes(shape = HBName), alpha = 2/5) + 
+    geom_smooth(method = "lm", se = TRUE) + 
+    facet_wrap(~ CountryDecile, ncol = 1)+
+    theme(legend.position = 'bottom',
+          legend.title=element_blank(),
+          legend.key.size = unit(0.2, 'cm'),
+          legend.direction='vertical')+
+    xlab("Proportion.deprivation")
+})
+
+# patchwork
+wrap_plots(gg_l, ncol = 3)+
+  plot_annotation(title = 'Proportion.deprivation =15% most deprived/(15% most deprived+15% least deprived)')
+  
+```
+
+```{r}
+# Export a dataframe helping calculate increasrate annually in EXCEL
+incrate <- my_data%>%
+  group_by(HBName,year)%>%
+  summarise(NumberWaiting = mean(NumberWaiting),
+            .groups = "drop")%>%
+  pivot_wider(
+    names_from = HBName,
+    values_from = NumberWaiting
+  )
+
+write.csv(x = incrate,file = "increaserate.csv")
+```
+
+```{r}
+# Analysis of population structure
+anlsSex <- my_data%>%
+  group_by(HBName)%>%
+  summarise(
+    mprop.female= round(mean(prop.female),3),
+    mprop.old= round(mean(prop.old),3),
+    .groups = 'drop'
+  )%>%
+  arrange(desc(mprop.old))
+
+
+# Plot
+p4 <-ggplot(anlsSex) +
+  geom_segment( aes(x=HBName, xend=HBName, 
+                    y=mprop.old, yend=mprop.female), color="grey") +
+  geom_point( aes(x=HBName, y=mprop.old), color=rgb(0.2,0.7,0.1,0.5), size=2 ) +
+  geom_point( aes(x=HBName, y=mprop.female), color=rgb(0.7,0.2,0.1,0.5), size=2 ) +
+  coord_flip()+
+  # scale_x_discrete(limits = anlsSex$Specialty)+
+  scale_color_viridis_d()+
+  labs(
+    caption = "Old proportion in green vs Felmae proportion in red"
+  )+
+  xlab("")+
+  ylab("")
+
+
+p4
+```
+
+```{r}
+# analysis of WTE
+anlsWTE <- data6%>%
+  group_by(HBName)%>%
+  summarise(numWTE = mean(WTE),
+            Waiting = mean(NumberWaiting),
+            numpopulation_4k = mean(AllAges.All)/10000,
+            .groups = 'drop')%>%
+  mutate(
+    # Create a new column WaitingperPTE giving information on 
+    # how many waiting patiens per WTE 
+    WaitingperPTE = ifelse(numWTE<1,Waiting,Waiting/numWTE)
+  )%>%
+   pivot_longer(
+    cols = starts_with("num"),
+    names_to = "condition",
+    names_prefix = "num",
+    values_to = "Num"
+  )%>%
+  mutate(across(where(~is.numeric(.)),round,2))
+
+
+
+anlsWTE_line <- filter(anlsWTE,condition == 'WTE')
+
+cbbPalette <-c(rgb(0.2,0.7,0.1,0.5),rgb(0.7,0.2,0.1,0.5))
+
+pWTE <- ggplot(anlsWTE, aes(fill=condition, y=Num, x=HBName)) + 
+    geom_bar(position="dodge", stat="identity")+
+    theme(axis.text.x=element_text(angle=90, hjust =1))+
+    xlab("")+
+    ylab("")+
+    theme(
+      legend.position = "none",
+      axis.text.y=element_blank()
+    )+
+   scale_fill_manual(values=cbbPalette)+
+   labs(
+    caption = "Mean population(4k) in green vs Mean WTE in red"
+  )+
+  geom_line(
+    data = anlsWTE_line,
+    aes(x = HBName, y = WaitingperPTE,group = 1), size = 1)+
+  coord_flip()
+
+library(patchwork)
+(p4 + pWTE)
+```
+
+```{r}
+# Analysis of addition and removals
+anlsAD <- data4%>%
+  filter(year>2018 & Specialty != 'Z9')%>%
+  # Get the gross increaase in waiting lists by 
+  # deducting removals from new additions
+  mutate(offset = ifelse(is.infinite(Additions - Removals),0,Additions - Removals))%>%
+  group_by(HBName,year)%>%
+  # Annual mean of the gross increase
+  summarise(n = round(mean(offset),3),
+            Transferred = round(mean(Transferred),3),
+            .groups = 'drop')
+anlsAD$mark = ifelse(anlsAD$n>1, "+", "-")
+
+ggplot(anlsAD, aes(x=HBName, y=n))+
+  geom_segment( aes(x=0, xend=n, y=HBName, yend=HBName, color=mark), size=1.3, alpha=0.9) +
+  theme(
+    legend.position = "none",
+    panel.border = element_blank(),
+  ) +
+  ylab("") +
+  xlab("")+
+  facet_wrap(~year,ncol=2)
+```
+
+```{r}
+#distribution check
+ggplot(my_data,aes(log(NumberWaiting)))+
+  geom_histogram(alpha=0.8)+
+  geom_vline(aes(xintercept=mean(log(NumberWaiting))), color="blue",
+             linetype="dashed")+
+  facet_wrap(~HBName,ncol=4)
+```
+
+```{r}
+library(Hmisc)
+# Help function
+# find those useful and correlated varaible 
+# so we can just choose those useful information to explore 
+# in this way we can do feature dimension reduction
+getCorr <- function(dataframe,y){
+  dataframe <- select_if(dataframe, is.numeric)
+  y_columnindex <- which(colnames(dataframe)== y)
+  corr_matrix <- rcorr(as.matrix(dataframe),type="pearson")
+  corr_xy <- as_tibble(corr_matrix$r)%>%pull(y_columnindex)
+  p_xy <- as_tibble(corr_matrix$P)%>%pull(y_columnindex)
+  table <- rbind(corr_xy[-y_columnindex],
+                p_xy[-y_columnindex])
+  colnames(table) <- colnames(dataframe)[-y_columnindex]
+  rownames(table) <- c('corr','P')
+  round(table,3)
+}
+
+data.explore <- select(my_data,
+                       c(HBT,Specialty,year,NumberWaiting,
+                         AllAges.All, WTE,prop.male,
+                         prop.child,prop.female,prop.old,PercentageOccupancy,
+                         prop.male,UrbanRuralfold,ARratio, 
+                         CountryDecile,prop.mdpriv,NumberEmergency))
+data.explore$year = as.character(data.explore$year )
+# correlation between variable and the response calculated by "peason"
+kbl(getCorr(data.explore,'NumberWaiting'))
+```
+
+```{r}
+# Heat map
+test <- select_if(select(data.explore,!ARratio),is.numeric)
+corr <- cor(test,method = 'pearson')
+ggcorrplot(corr,type = "lower",lab = TRUE)
+```
+
+```{r}
+# convert UrbanRuralfold and CountryDecile into factor
+data.train <- data.explore   
+
+data.explore$UrbanRuralfold <- as.factor(data.explore$UrbanRuralfold)
+data.explore$CountryDecile <- as.factor(data.explore$CountryDecile)
+data.explore$year <- as.character(data.explore$year)
+
+data.explore.S <- lapply(data.explore[-4], function(x) if(is.numeric(x)){scale(x, center=FALSE, scale=TRUE)} else x)
+data.explore.S$y <- data.explore$NumberWaiting
+
+```
+
+```{r}
+formula_1 =  as.formula(y ~ prop.old + UrbanRuralfold +prop.mdpriv + WTE + NumberEmergency)
+formula_2 =  as.formula(y ~ prop.old + UrbanRuralfold + CountryDecile + WTE + NumberEmergency)
+baseline1 = glm(formula_1, family = poisson, data = data.explore.S,offset =log(AllAges.All))
+baseline2 = glm(formula_2, family = poisson, data = data.explore.S,offset =log(AllAges.All))
+anova(baseline1,baseline2)
+```
+
+```{r}
+library("glmmTMB")
+
+# Zero-inflated model 
+formula_ =  as.formula(y~prop.old+UrbanRuralfold + offset(log(AllAges.All)) + 
+                         (1|HBT) + (1|Specialty))
+
+glmmzinf <- glmmTMB(formula_,
+data=data.explore.S,ziformula=~1,
+family=poisson)
+
+summary(glmmzinf)
+
+
+formula_1 =  as.formula(y~prop.old+UrbanRuralfold + offset(log(AllAges.All)) + 
+                         (1|HBT:Specialty))
+update(glmmzinf,formula_1)
+```
+
+```{r}
+anova(baseline1,glmmzinf)
+```
+
+```{r}
+# Model glmer
+library(lme4)
+
+formula_1 =  as.formula(y ~ prop.old + offset(log(AllAges.All))+UrbanRuralfold +(1|HBT) + (1|Specialty))
+  
+
+# Adding covariants one by one and check any improvements
+formula_2 =  as.formula(y~  prop.old+UrbanRuralfold+prop.female+ log(NumberEmergency+1)+ PercentageOccupancy+prop.mdpriv+ log(WTE+1)+
+(1|HBT:Specialty)) 
+
+formula_2 =  as.formula(y~  prop.old+UrbanRuralfold+prop.female+ NumberEmergency+ PercentageOccupancy+prop.mdpriv+ WTE+
+(1|HBT:Specialty)) 
+
+glmm1 <- glmer(formula_1, family=poisson(link = "log"), data=data.explore.S)
+glmm2 <- glmer(formula_2, family=poisson(link = "log"), data=data.explore.S)
+# anova(modgh1,modgh2)
+require(modelsummary)
+
+# Goodness of fit check
+get_gof(glmm2)
+summary(glmm2)
+
+```
+
+
+```{r}
+# Residual plots
+res <- residuals(glmm2)
+fits <- fitted(glmm2)
+df.res <- data.frame(HB = data.explore.S$HBT,
+                     Specialty =data.explore.S$Specialty,
+                     res = res,
+                     fits = fits )%>%
+          left_join(df_nameHB,by = c("HB"))%>%
+          select(!c(HBDateEnacted,HBDateArchived,Country))
+
+# the residual plot
+r1 <- ggplot(df.res,aes(x=HBName,y=res,color=HBName)) +
+  geom_point(size=1.5,alpha=0.5) +
+  geom_hline(yintercept=0,linetype="dashed") +
+  geom_hline(yintercept = mean(df.res$res),color = "#E69F00")+
+  xlab("")+
+  geom_smooth(se=FALSE)+
+  scale_color_viridis_d()+
+  theme(axis.text.x=element_text(angle=90, hjust =1),
+        legend.position = "none")+
+  coord_flip()
+  
+
+r2 <- ggplot(df.res,aes(x=res,color=HBName,fill=HBName)) +
+  geom_histogram(alpha=0.5,binwidth=0.25) +
+  scale_y_continuous(name="Frequency",expand=expansion(mult=c(0,0.05))) +
+  scale_x_continuous(name="Studentized Residuals")+
+  scale_color_viridis_d()+
+  theme(
+    legend.position = "none"
+  )
+
+r3 <- ggplot(df.res,aes(x=fits, y = res,color = HBName)) +
+  geom_point(alpha=0.5,binwidth=0.25) +
+  scale_color_viridis_d()+
+  theme(
+    legend.position = "none"
+  )+
+  xlab("Fitted value vs residuals")+
+  ylab("")+
+  geom_smooth()
+
+
+(r1 + r2)/r3
+```
+
+
+```{r}
+## QQ norm for random effects and residual
+df.ranef <- as.data.frame(ranef(glmm2)[1])%>%
+  mutate(grp = rownames(.))%>%
+  separate(grp, c("HBT", "Specialty"), ":", remove = FALSE)%>%
+  left_join(df_nameHB,by = c("HBT" = "HB"))%>%
+  select(!c(HBDateEnacted,HBDateArchived,Country))
+
+
+q1<- ggplot(df.ranef,aes(sample =X.Intercept.))+
+  stat_qq(alpha=0.5,binwidth=0.25)+
+  stat_qq_line(alpha=0.5,binwidth=0.25)+
+  xlab("QQ plot for random effect")+
+  ylab("")
+  
+q2<- ggplot(df.res,aes(sample =res))+
+  stat_qq(alpha=0.5,binwidth=0.25)+
+  stat_qq_line()+
+  xlab("QQ plot for residuals")+
+  ylab("")
+
+q1 + q2
+```
+
+```{r}
+ranef.mean <- mean(df.ranef$X.Intercept.)
+df.coefplot<-data.frame(Mean=c(ranef.mean,62.32,4.02,-1.15,-2.47,-3.91,-3.78,-6.16,
+                               -60.17,-0.16,0.03,-0.11,-0.18),
+               sd=c(2.14,0.4602,0.0131,0.4579,0.4262,0.5254,0.5715,0.5414,0.2044,
+                    0.0050,0.0022,0.0082,0.3315),
+               Category=c("HBT:Specialty","Intercept","prop.old","Urbanfold2","Urbanfold3","Urbanfold4",
+                          "Urbanfold5","Urbanfold7","prop.female","log(NumberEmergency)","PercentageOccupancy",
+                          "prop.dpriv","log(WTE)"))
+
+# Coefficient information
+df.coef <- as.data.frame(coef(glmm2)[1])%>%
+  mutate(grp = rownames(.))%>%
+  separate(grp, c("HBT", "Specialty"), ":", remove = FALSE)%>%
+  pivot_longer(
+  cols = starts_with("HBT.Specialty"),
+  names_prefix = "HBT.Specialty.",
+  names_to = "Variable",
+  values_to = "Coef"
+  )%>%
+  left_join(df_nameHB,by = c("HBT" = "HB"))
+
+```
+
